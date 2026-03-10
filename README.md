@@ -38,7 +38,7 @@ This repository includes:
 └─ output/
    ├─ cyclistic-presentation.html
    └─ cyclistic-document.html
-
+```
 ## Tools used
 
 - **Quarto**
