@@ -1,0 +1,66 @@
+:root {
+  --brand-blue: #1f4e79;
+  --soft-blue: #eaf2fb;
+  --soft-orange: #fff2e8;
+  --soft-gray: #f7f9fb;
+  --text-muted: #5b616b;
+}
+
+body {
+  line-height: 1.65;
+}
+
+.quarto-title-block .quarto-title-banner {
+  background: linear-gradient(90deg, #1f4e79 0%, #2f6ea5 100%);
+  color: white;
+}
+
+.quarto-title-block .title {
+  font-weight: 700;
+}
+
+#TOC {
+  font-size: 0.95rem;
+}
+
+#TOC .nav-link.active {
+  color: var(--brand-blue);
+  font-weight: 700;
+}
+
+h1, h2, h3 {
+  color: var(--brand-blue);
+  font-weight: 700;
+}
+
+.callout {
+  border-radius: 0.85rem;
+  border-width: 1px;
+}
+
+.callout-note {
+  background: var(--soft-blue);
+}
+
+.callout-warning {
+  background: #fff7e6;
+}
+
+.callout-important {
+  background: var(--soft-gray);
+}
+
+pre code {
+  font-size: 0.92rem;
+}
+
+table caption {
+  caption-side: top;
+  font-weight: 700;
+  color: var(--brand-blue);
+  margin-bottom: 0.35rem;
+}
+
+.figure-caption {
+  color: var(--text-muted);
+}

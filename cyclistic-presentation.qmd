@@ -1,0 +1,575 @@
+---
+title: "Cyclistic Bike-Share"
+subtitle: "How annual members and casual riders use bikes differently"
+author: "Eduardo Escudero"
+format:
+  revealjs:
+    theme: [simple, reveal_refined.scss]
+    slide-level: 0
+    slide-number: c/t
+    controls: true
+    progress: true
+    history: false
+    hash: false
+    navigation-mode: linear
+    transition: fade
+    center: false
+    embed-resources: true
+    footer: "Cyclistic Case Study"
+    width: 1600
+    height: 900
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(tidyverse)
+library(lubridate)
+library(scales)
+
+options(scipen = 999)
+knitr::opts_chunk$set(fig.align = "center", out.width = "90%")
+
+path <- "C:/Users/G18333/Documents/Eduardo Escudero/Cursos/Coursera/Google data analytics/Capstone/Data_capstone"
+
+user_palette <- c(casual = "#E67E22", member = "#1F78B4")
+user_labels <- c(casual = "Casual", member = "Member")
+weekday_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+weekday_short <- c("Monday" = "Mon", "Tuesday" = "Tue", "Wednesday" = "Wed", "Thursday" = "Thu", "Friday" = "Fri", "Saturday" = "Sat", "Sunday" = "Sun")
+month_lookup <- c(
+  "01" = "January", "02" = "February", "03" = "March", "04" = "April",
+  "05" = "May", "06" = "June", "07" = "July", "08" = "August",
+  "09" = "September", "10" = "October", "11" = "November", "12" = "December"
+)
+month_short <- c(
+  "January" = "Jan", "February" = "Feb", "March" = "Mar", "April" = "Apr",
+  "May" = "May", "June" = "Jun", "July" = "Jul", "August" = "Aug",
+  "September" = "Sep", "October" = "Oct", "November" = "Nov", "December" = "Dec"
+)
+
+plot_theme <- theme_minimal(base_size = 18) +
+  theme(
+    plot.title.position = "plot",
+    plot.caption.position = "plot",
+    plot.title = element_text(face = "bold", size = 19, colour = "#183247", margin = margin(b = 6)),
+    plot.subtitle = element_text(size = 11.5, colour = "#5B616B", margin = margin(b = 10)),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.title = element_text(face = "bold", size = 12.5),
+    axis.text = element_text(size = 10.5, colour = "#304454"),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10.5),
+    plot.margin = margin(10, 26, 10, 10)
+  )
+
+ggplot2::theme_set(plot_theme)
+
+files <- list.files(
+  path = path,
+  pattern = "^\\d{6}-divvy-tripdata\\.csv$",
+  full.names = TRUE
+) |> sort()
+
+if (length(files) == 0) {
+  stop("No files matching YYYYMM-divvy-tripdata.csv were found in: ", path)
+}
+
+divvy_all <- purrr::map_dfr(files, function(f) {
+  m <- stringr::str_match(basename(f), "^(\\d{4})(\\d{2})-divvy-tripdata\\.csv$")
+  readr::read_csv(f, show_col_types = FALSE) %>%
+    mutate(
+      year = as.integer(m[2]),
+      month = as.integer(m[3]),
+      month_name = factor(month_lookup[m[3]], levels = unname(month_lookup), ordered = TRUE)
+    )
+})
+
+divvy_all <- divvy_all %>%
+  mutate(
+    started_at = ymd_hms(started_at),
+    ended_at = ymd_hms(ended_at),
+    start_date = as.Date(started_at),
+    weekday_num = wday(start_date, week_start = 1),
+    weekday = factor(weekday_levels[weekday_num], levels = weekday_levels, ordered = TRUE),
+    duration_min = as.numeric(difftime(ended_at, started_at, units = "mins")),
+    duration_sec = as.numeric(difftime(ended_at, started_at, units = "secs"))
+  )
+
+divvy_filter_base <- divvy_all %>%
+  filter(duration_sec > 0, !is.na(end_lat), !is.na(end_lng))
+
+cutoff_995 <- quantile(divvy_filter_base$duration_sec, 0.995, na.rm = TRUE)
+
+divvy_filter <- divvy_filter_base %>%
+  filter(duration_sec <= cutoff_995) %>%
+  mutate(start_hour = hour(started_at))
+
+removed_pct <- (nrow(divvy_all) - nrow(divvy_filter)) / nrow(divvy_all)
+
+avg_ride_by_user <- divvy_filter %>%
+  group_by(member_casual) %>%
+  summarise(avg_ride_length_min = round(mean(duration_min, na.rm = TRUE), 2), .groups = "drop")
+
+rides_by_user_weekday <- divvy_filter %>%
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n(), .groups = "drop") %>%
+  group_by(member_casual) %>%
+  mutate(pct_within_user_type = number_of_rides / sum(number_of_rides)) %>%
+  ungroup()
+
+avg_ride_by_user_weekday <- divvy_filter %>%
+  group_by(member_casual, weekday) %>%
+  summarise(avg_ride_length_min = mean(duration_min, na.rm = TRUE), .groups = "drop")
+
+rides_by_hour <- divvy_filter %>%
+  group_by(member_casual, start_hour) %>%
+  summarise(number_of_rides = n(), .groups = "drop") %>%
+  group_by(member_casual) %>%
+  mutate(pct_within_user_type = number_of_rides / sum(number_of_rides)) %>%
+  ungroup()
+
+rides_by_month <- divvy_filter %>%
+  group_by(member_casual, month_name) %>%
+  summarise(number_of_rides = n(), .groups = "drop")
+
+seasonality_summary <- rides_by_month %>%
+  group_by(member_casual) %>%
+  summarise(
+    low_month = as.character(month_name[which.min(number_of_rides)]),
+    high_month = as.character(month_name[which.max(number_of_rides)]),
+    low_rides = min(number_of_rides),
+    high_rides = max(number_of_rides),
+    peak_to_trough = round(high_rides / low_rides, 1),
+    .groups = "drop"
+  )
+
+summer_gap <- rides_by_month %>%
+  filter(month_name == "August") %>%
+  summarise(ratio = round(number_of_rides[member_casual == "casual"] / number_of_rides[member_casual == "member"], 2)) %>%
+  pull(ratio)
+
+winter_gap <- rides_by_month %>%
+  filter(month_name == "January") %>%
+  summarise(ratio = round(number_of_rides[member_casual == "casual"] / number_of_rides[member_casual == "member"], 2)) %>%
+  pull(ratio)
+
+weekend_share <- rides_by_user_weekday %>%
+  mutate(day_type = if_else(weekday %in% c("Saturday", "Sunday"), "Weekend", "Weekday")) %>%
+  group_by(member_casual, day_type) %>%
+  summarise(pct = sum(pct_within_user_type), .groups = "drop")
+
+peak_hour <- rides_by_hour %>%
+  group_by(member_casual) %>%
+  slice_max(order_by = pct_within_user_type, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+casual_avg <- avg_ride_by_user$avg_ride_length_min[avg_ride_by_user$member_casual == "casual"]
+member_avg <- avg_ride_by_user$avg_ride_length_min[avg_ride_by_user$member_casual == "member"]
+casual_weekend <- weekend_share$pct[weekend_share$member_casual == "casual" & weekend_share$day_type == "Weekend"]
+member_weekend <- weekend_share$pct[weekend_share$member_casual == "member" & weekend_share$day_type == "Weekend"]
+casual_peak_hour <- peak_hour$start_hour[peak_hour$member_casual == "casual"]
+member_peak_hour <- peak_hour$start_hour[peak_hour$member_casual == "member"]
+```
+
+## Cyclistic Bike-Share
+
+::: hero-box
+**Casual riders behave more like leisure users. Members behave more like routine users.**
+:::
+
+::: eyebrow
+Executive snapshot
+:::
+
+:::::::::::: summary-grid
+::::: summary-card
+::: card-label
+Ride length
+:::
+
+::: big-number
+`r casual_avg` min
+:::
+
+Casual average trip length versus **`r member_avg` min** for members.
+:::::
+
+::::: summary-card
+::: card-label
+Weekend weight
+:::
+
+::: big-number
+`r percent(casual_weekend, accuracy = 0.1)`
+:::
+
+Weekend share for casual riders versus **`r percent(member_weekend, accuracy = 0.1)`** for members.
+:::::
+
+::::: summary-card
+::: card-label
+Seasonality
+:::
+
+::: big-number
+`r seasonality_summary$peak_to_trough[seasonality_summary$member_casual == "casual"]`x
+:::
+
+Casual peak-to-trough monthly swing versus **`r seasonality_summary$peak_to_trough[seasonality_summary$member_casual == "member"]`x** for members.
+:::::
+::::::::::::
+
+::: mini-note
+This deck keeps the structure flat and linear to avoid navigation issues while still adding more visual polish.
+:::
+
+------------------------------------------------------------------------
+
+## Agenda
+
+::: chip-row
+[Business question]{.chip} [Data scope]{.chip} [Ride length]{.chip} [Weekday mix]{.chip} [Time of day]{.chip} [Monthly pattern]{.chip} [Recommendations]{.chip}
+:::
+
+::: takeaway-box
+**Presentation logic:** start with the cleaned data, then compare trip duration, weekly timing, hourly timing, and monthly demand.
+:::
+
+------------------------------------------------------------------------
+
+## Business question
+
+::: hero-box
+**How do annual members and casual riders use Cyclistic bikes differently?**
+:::
+
+-   Members are more profitable than casual riders.
+-   Marketing needs evidence on when, how, and how long each group rides.
+-   The business goal is to identify where casual behavior looks most convertible into membership.
+
+::: takeaway-box
+**Takeaway:** the analysis focuses on behavioral differences that can support membership conversion strategy.
+:::
+
+------------------------------------------------------------------------
+
+## Data scope and filtering
+
+::::::::::::::: stat-grid
+::::: stat-card
+::: card-label
+Monthly files
+:::
+
+::: big-number
+12
+:::
+
+Trip-level historical data for 2025.
+:::::
+
+::::: stat-card
+::: card-label
+Trips loaded
+:::
+
+::: big-number
+`r format(nrow(divvy_all), big.mark = ",")`
+:::
+
+Raw observations before filtering.
+:::::
+
+::::: stat-card
+::: card-label
+Trips kept
+:::
+
+::: big-number
+`r format(nrow(divvy_filter), big.mark = ",")`
+:::
+
+Cleaned sample used in the analysis.
+:::::
+
+::::: stat-card
+::: card-label
+Trips removed
+:::
+
+::: big-number
+`r percent(removed_pct, accuracy = 0.1)`
+:::
+
+Invalid or extreme observations excluded.
+:::::
+:::::::::::::::
+
+Filtering rules: - Remove non-positive duration. - Remove trips with missing end coordinates. - Remove rides above the 99.5th percentile of duration.
+
+::: takeaway-box
+**Takeaway:** findings are based on a cleaned sample of plausible rides, not on raw operational logs.
+:::
+
+------------------------------------------------------------------------
+
+## Why this comparison matters
+
+::::::::: summary-grid
+:::: summary-card
+::: card-label
+Casual riders
+:::
+
+Longer trips, heavier weekend usage, stronger seasonal spikes.
+::::
+
+:::: summary-card
+::: card-label
+Members
+:::
+
+Shorter trips, more weekday concentration, steadier demand over time.
+::::
+
+:::: summary-card
+::: card-label
+Implication
+:::
+
+Conversion messaging should emphasize convenience, routine value, and repeated use.
+::::
+:::::::::
+
+::: takeaway-box
+**Takeaway:** the strongest evidence points to different trip purposes, not just different ride volumes.
+:::
+
+------------------------------------------------------------------------
+
+## Key finding 1: casual riders take longer trips
+
+```{r}
+#| fig-height: 5.7
+#| fig-width: 11.2
+#| fig-align: center
+
+avg_ride_by_user %>%
+  ggplot(aes(x = member_casual, y = avg_ride_length_min, fill = member_casual)) +
+  geom_col(width = 0.62) +
+  geom_text(aes(label = round(avg_ride_length_min, 2)), vjust = -0.35, size = 5.7, fontface = "bold") +
+  scale_fill_manual(values = user_palette, labels = user_labels) +
+  scale_x_discrete(labels = user_labels) +
+  scale_y_continuous(
+    limits = c(0, max(avg_ride_by_user$avg_ride_length_min) * 1.22),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "Average ride length by rider type",
+    subtitle = "Casual riders spend more time per trip even after filtering invalid and extreme rides",
+    x = NULL,
+    y = "Average ride length (minutes)"
+  ) +
+  theme(legend.position = "none")
+```
+
+::: takeaway-box
+**Takeaway:** casual riders spend more time per trip, consistent with more leisure-oriented usage.
+:::
+
+------------------------------------------------------------------------
+
+## Key finding 2: the weekday mix is different
+
+```{r}
+#| fig-height: 5.8
+#| fig-width: 11.4
+#| fig-align: center
+
+rides_by_user_weekday %>%
+  ggplot(aes(x = weekday, y = pct_within_user_type, fill = member_casual)) +
+  geom_col(position = position_dodge(width = 0.76), width = 0.68) +
+  scale_fill_manual(values = user_palette, labels = user_labels) +
+  scale_x_discrete(labels = weekday_short) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  labs(
+    title = "Share of rides by weekday",
+    subtitle = "Percent of rides within each rider type",
+    x = NULL,
+    y = "Share of rides",
+    fill = NULL
+  )
+```
+
+::: takeaway-box
+**Takeaway:** casual riders are more concentrated on weekends, while members show a stronger weekday profile.
+:::
+
+------------------------------------------------------------------------
+
+## Key finding 2b: casual riders also ride longer on weekends
+
+```{r}
+#| fig-height: 5.8
+#| fig-width: 11.4
+#| fig-align: center
+
+avg_ride_by_user_weekday %>%
+  ggplot(aes(x = weekday, y = avg_ride_length_min, color = member_casual, group = member_casual)) +
+  geom_line(linewidth = 1.25) +
+  geom_point(size = 3.2) +
+  scale_color_manual(values = user_palette, labels = user_labels) +
+  scale_x_discrete(labels = weekday_short) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.09))) +
+  labs(
+    title = "Average ride length across the week",
+    subtitle = "Casual riders stay above members every day and peak on weekends",
+    x = NULL,
+    y = "Average ride length (minutes)",
+    color = NULL
+  )
+```
+
+::: takeaway-box
+**Takeaway:** the difference is not only when each group rides, but also how they ride across the week.
+:::
+
+------------------------------------------------------------------------
+
+## Key finding 3: time of day separates the groups
+
+```{r}
+#| fig-height: 5.8
+#| fig-width: 11.4
+#| fig-align: center
+
+rides_by_hour %>%
+  ggplot(aes(x = start_hour, y = pct_within_user_type, color = member_casual)) +
+  geom_line(linewidth = 1.25) +
+  scale_color_manual(values = user_palette, labels = user_labels) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.02, 0.08))
+  ) +
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 23)) +
+  labs(
+    title = "Hourly distribution of rides",
+    subtitle = glue::glue("Peak member hour: {member_peak_hour}:00 | Peak casual hour: {casual_peak_hour}:00"),
+    x = "Hour of day",
+    y = "Share of rides",
+    color = NULL
+  )
+```
+
+::: takeaway-box
+**Takeaway:** members look more routine-oriented, while casual riders appear more tied to free time than fixed commuting windows.
+:::
+
+------------------------------------------------------------------------
+
+## Key finding 4: both groups are seasonal, but not equally
+
+```{r}
+#| fig-height: 5.9
+#| fig-width: 11.4
+#| fig-align: center
+
+rides_by_month %>%
+  ggplot(aes(x = month_name, y = number_of_rides, color = member_casual, group = member_casual)) +
+  geom_line(linewidth = 1.25) +
+  geom_point(size = 3) +
+  scale_color_manual(values = user_palette, labels = user_labels) +
+  scale_x_discrete(labels = month_short) +
+  scale_y_continuous(
+    labels = label_number(scale_cut = cut_short_scale()),
+    expand = expansion(mult = c(0.02, 0.08))
+  ) +
+  labs(
+    title = "Monthly ride volume",
+    subtitle = "Members lead every month, but casual demand swings much more strongly",
+    x = NULL,
+    y = "Number of rides",
+    color = NULL
+  )
+```
+
+-   Both groups rise from spring into summer and decline in winter.
+-   Casual riders swing about **`r seasonality_summary$peak_to_trough[seasonality_summary$member_casual == "casual"]`x** from `r seasonality_summary$low_month[seasonality_summary$member_casual == "casual"]` to `r seasonality_summary$high_month[seasonality_summary$member_casual == "casual"]`.
+-   Members also vary seasonally, but less sharply: about **`r seasonality_summary$peak_to_trough[seasonality_summary$member_casual == "member"]`x**.
+-   The casual/member ratio rises from **`r winter_gap`** in January to **`r summer_gap`** in August.
+
+::: takeaway-box
+**Takeaway:** seasonality affects both groups, but it amplifies casual demand much more strongly.
+:::
+
+------------------------------------------------------------------------
+
+## Recommendations
+
+:::::::::::: summary-grid
+::::::::::: summary-card
+:::::::::: card-label
+1.  Convert weekend casuals
+
+    </div>
+
+    Focus membership offers on high-leisure periods, especially Saturday and Sunday trips.
+
+:::
+
+::::::::: summary-card
+:::::::: card-label
+2.  Sell convenience and routine
+
+    </div>
+
+    Message membership as a better fit for repeated, shorter, more frequent usage.
+
+:::
+
+::::::: summary-card
+:::::: card-label
+3.  Time campaigns with demand peaks
+
+    </div>
+
+    Prioritize months and hours when casual demand accelerates and repeat behavior is more likely.
+
+:::
+
+:::
+
+::: takeaway-box
+**Takeaway:** the best conversion opportunities appear where casual demand is high, recurring, and seasonally amplified.
+:::
+
+------------------------------------------------------------------------
+
+## Bottom line
+
+::: hero-box
+**Casual riders look more leisure-oriented. Members look more routine-oriented.**
+:::
+
+The strongest differences are visible in: - trip duration - weekday distribution - time-of-day behavior - the strength of seasonal demand
+
+::: mini-note
+This version keeps the slide structure flat on purpose. If it renders cleanly, the next risky feature to test would be a multi-column content slide.
+:::
+::::::
+:::::::
+::::::::
+:::::::::
+::::::::::
+:::::::::::
+::::::::::::

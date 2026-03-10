@@ -1,0 +1,676 @@
+---
+title: "Cyclistic Bike-Share Case Study"
+subtitle: "How do annual members and casual riders use Cyclistic bikes differently?"
+author: "Eduardo Escudero"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    smooth-scroll: true
+    anchor-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    df-print: paged
+    page-layout: full
+    css: styles.css
+execute:
+  echo: true
+  warning: false
+  message: false
+  freeze: auto
+editor: visual
+---
+
+::: callout-important
+## Report guide
+
+This report follows the official Cyclistic roadmap: **Ask, Prepare, Process, Analyze, Share, and Act**. The goal is to identify how annual members and casual riders use Cyclistic bikes differently and translate those findings into business recommendations.
+:::
+
+```{r}
+#| label: setup
+#| include: false
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(scales)
+
+options(scipen = 999)
+
+ggplot2::theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title.position = "plot",
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(color = "#5B616B"),
+      panel.grid.minor = element_blank(),
+      axis.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+)
+
+user_palette <- c(
+  casual = "#E67E22",
+  member = "#1F78B4"
+)
+```
+
+# Ask
+
+## Business task
+
+Cyclistic's marketing team wants to understand how **annual members** and **casual riders** use the bike-share system differently. The specific business task for this case study is to answer the following question:
+
+> **How do annual members and casual riders use Cyclistic bikes differently?**
+
+The answer should support future marketing decisions designed to convert casual riders into annual members.
+
+## Stakeholders
+
+-   **Lily Moreno**, Director of Marketing
+-   **Cyclistic marketing analytics team**
+-   **Cyclistic executive team**
+
+## Why this matters
+
+Understanding behavioral differences between the two rider groups can help Cyclistic design more targeted marketing strategies, improve messaging, and focus conversion efforts on the usage patterns that distinguish casual riders from members.
+
+# Prepare
+
+## Data source
+
+The analysis uses the previous 12 months of Cyclistic historical trip data stored as monthly CSV files named with the format `YYYYMM-divvy-tripdata.csv`. Each row represents one bike trip.
+
+::: callout-note
+## Data source notes
+
+-   The data is public and suitable for analyzing system usage patterns.
+-   Personally identifiable information is not available, so the analysis focuses on trip behavior rather than customer identity.
+-   This limitation prevents linking trips to rider demographics, home locations, or repeated purchases across individuals.
+:::
+
+## Data organization
+
+The files are stored locally in a folder and loaded into R. The dataset is organized at the **trip level**, where each record includes ride metadata such as bike type, timestamps, station information, coordinates, and user type.
+
+```{r}
+#| label: load-data
+#| include: false
+
+# Update this path before rendering the document on your machine.
+path <- "C:/Users/G18333/Documents/Eduardo Escudero/Cursos/Coursera/Google data analytics/Capstone/Data_capstone"
+
+files <- list.files(
+  path = path,
+  pattern = "^\\d{6}-divvy-tripdata\\.csv$",
+  full.names = TRUE
+)
+
+if (length(files) == 0) {
+  stop("No files matching YYYYMM-divvy-tripdata.csv were found in: ", path)
+}
+
+files <- sort(files)
+
+month_lookup <- c(
+  "01" = "January", "02" = "February", "03" = "March", "04" = "April",
+  "05" = "May", "06" = "June", "07" = "July", "08" = "August",
+  "09" = "September", "10" = "October", "11" = "November", "12" = "December"
+)
+
+divvy_all <- purrr::map_dfr(files, function(f) {
+  m <- stringr::str_match(basename(f), "^(\\d{4})(\\d{2})-divvy-tripdata\\.csv$")
+  yr <- as.integer(m[2])
+  mo <- as.integer(m[3])
+
+  readr::read_csv(f, show_col_types = FALSE) %>%
+    mutate(
+      year = yr,
+      month = mo,
+      month_name = factor(month_lookup[m[3]], levels = unname(month_lookup), ordered = TRUE)
+    )
+})
+
+rm(files)
+gc()
+```
+
+## Initial structure review
+
+```{r}
+#| label: initial-columns
+colnames(divvy_all)
+```
+
+```{r}
+#| label: initial-head
+head(divvy_all)
+```
+
+```{r}
+#| label: dataset-size
+#| echo: false
+
+kable(
+  tibble(
+    metric = c("Rows", "Columns"),
+    value = c(nrow(divvy_all), ncol(divvy_all))
+  ),
+  caption = "Initial dataset dimensions"
+)
+```
+
+## Data credibility and limitations
+
+The dataset is credible for analyzing **trip behavior**, but it still has important limitations:
+
+-   It is appropriate for studying differences between casual riders and annual members because it includes timestamps, bike type, coordinates, and rider category.
+-   It does **not** include personally identifiable information, so it cannot explain *who* the riders are beyond their user type.
+-   Some variables contain missing values, especially for electric bike trips.
+-   A small number of rides have invalid durations or incomplete trip-end coordinates and must be handled before analysis.
+
+# Process
+
+## Tools used
+
+This project uses **R** because it allows fast loading of multiple CSV files, flexible data cleaning, reproducible transformations, and direct generation of tables and visualizations inside a single Quarto report.
+
+## Data cleaning and feature engineering
+
+The following steps were applied:
+
+1.  Append the 12 monthly files into one dataframe.
+2.  Create `year`, `month`, and `month_name` from the file name.
+3.  Create `start_date` and `end_date` from the ride timestamps.
+4.  Create an English `weekday` variable.
+5.  Create ride duration variables in minutes and seconds.
+6.  Review missing values, date ranges, and implausible durations.
+7.  Filter out invalid trips and extreme outliers.
+
+```{r}
+#| label: feature-engineering
+
+weekday_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+divvy_all <- divvy_all %>%
+  mutate(
+    started_at = ymd_hms(started_at),
+    ended_at = ymd_hms(ended_at),
+    start_date = as.Date(started_at),
+    end_date = as.Date(ended_at),
+    weekday_num = wday(start_date, week_start = 1),
+    weekday = factor(weekday_levels[weekday_num], levels = weekday_levels, ordered = TRUE),
+    duration_min = as.numeric(difftime(ended_at, started_at, units = "mins")),
+    duration_sec = as.numeric(difftime(ended_at, started_at, units = "secs"))
+  )
+```
+
+## Data quality checks
+
+### Total number of trips
+
+```{r}
+#| label: total-trips
+
+divvy_all %>%
+  summarise(total_trips = n()) %>%
+  kable(caption = "Total number of trips in the appended dataset")
+```
+
+### Distinct values in key variables
+
+```{r}
+#| label: distinct-values
+
+divvy_all %>%
+  summarise(
+    rideable_type_unique = n_distinct(rideable_type),
+    member_casual_unique = n_distinct(member_casual),
+    weekday_unique = n_distinct(weekday),
+    year_unique = n_distinct(year),
+    month_unique = n_distinct(month),
+    start_station_id_unique = n_distinct(start_station_id),
+    end_station_id_unique = n_distinct(end_station_id)
+  ) %>%
+  kable(caption = "Distinct values in selected variables")
+```
+
+### Date range
+
+```{r}
+#| label: date-range
+
+divvy_all %>%
+  summarise(
+    earliest_start = min(started_at, na.rm = TRUE),
+    latest_start = max(started_at, na.rm = TRUE)
+  ) %>%
+  kable(caption = "Observed date range for ride starts")
+```
+
+### Trip duration distribution
+
+```{r}
+#| label: duration-summary
+
+summary(divvy_all$duration_min)
+
+quantile(
+  divvy_all$duration_min,
+  probs = c(0.90, 0.91, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 0.995),
+  na.rm = TRUE
+)
+```
+
+### Negative ride durations
+
+```{r}
+#| label: negative-duration-summary
+
+negative_duration_summary <- divvy_all %>%
+  summarise(
+    total_trips = n(),
+    negative_trips = sum(duration_sec < 0, na.rm = TRUE),
+    pct_negative = mean(duration_sec < 0, na.rm = TRUE) * 100
+  )
+
+kable(negative_duration_summary, caption = "Trips with negative duration")
+```
+
+### Missing values by variable
+
+```{r}
+#| label: missing-values-by-variable
+
+divvy_all %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") %>%
+  arrange(desc(missing_count)) %>%
+  kable(caption = "Missing values by variable")
+```
+
+### Missing start station by bike type
+
+```{r}
+#| label: missing-start-station
+
+divvy_all %>%
+  group_by(rideable_type) %>%
+  summarise(
+    total_trips = n(),
+    missing_start_station = sum(is.na(start_station_id)),
+    missing_pct = round(mean(is.na(start_station_id)) * 100, 2),
+    .groups = "drop"
+  ) %>%
+  kable(caption = "Missing start station ID by bike type")
+```
+
+### Trips with at least one missing value by bike type
+
+```{r}
+#| label: missing-by-bike-type
+
+divvy_all %>%
+  mutate(has_missing = if_any(everything(), is.na)) %>%
+  group_by(rideable_type) %>%
+  summarise(
+    total_trips = n(),
+    trips_with_missing = sum(has_missing),
+    pct_with_missing = round(mean(has_missing) * 100, 2),
+    .groups = "drop"
+  ) %>%
+  kable(caption = "Trips with at least one missing value by bike type")
+```
+
+### Coordinate consistency
+
+```{r}
+#| label: coordinate-summary
+
+coordinate_summary <- tibble(
+  variable = c("start_lat", "start_lng", "end_lat", "end_lng"),
+  minimum = c(min(divvy_all$start_lat, na.rm = TRUE), min(divvy_all$start_lng, na.rm = TRUE),
+              min(divvy_all$end_lat, na.rm = TRUE), min(divvy_all$end_lng, na.rm = TRUE)),
+  maximum = c(max(divvy_all$start_lat, na.rm = TRUE), max(divvy_all$start_lng, na.rm = TRUE),
+              max(divvy_all$end_lat, na.rm = TRUE), max(divvy_all$end_lng, na.rm = TRUE)),
+  missing_count = c(sum(is.na(divvy_all$start_lat)), sum(is.na(divvy_all$start_lng)),
+                    sum(is.na(divvy_all$end_lat)), sum(is.na(divvy_all$end_lng)))
+)
+
+kable(coordinate_summary, caption = "Coordinate ranges and missing values")
+```
+
+::: callout-warning
+## Main data quality issues
+
+-   A small number of trips have negative or zero duration and should not be kept for analysis.
+-   Some trips are missing end coordinates, which limits any analysis involving ride destinations.
+-   Electric bike trips contain most of the missing station information, so that pattern appears to be operational rather than random.
+-   Very long ride durations exist in the upper tail and can distort averages if they are not filtered.
+:::
+
+## Filtering decisions
+
+To improve data quality, the dataset was filtered by removing trips with invalid duration, trips with missing end coordinates, and unusually long rides above the **99.5th percentile** of duration.
+
+```{r}
+#| label: apply-filters
+
+divvy_filter_base <- divvy_all %>%
+  filter(
+    duration_sec > 0,
+    !is.na(end_lat),
+    !is.na(end_lng)
+  )
+
+cutoff_995 <- quantile(divvy_filter_base$duration_sec, 0.995, na.rm = TRUE)
+
+divvy_filter <- divvy_filter_base %>%
+  filter(duration_sec <= cutoff_995)
+
+filter_summary <- tibble(
+  original_rows = nrow(divvy_all),
+  valid_rows = nrow(divvy_filter_base),
+  final_filtered_rows = nrow(divvy_filter),
+  removed_invalid_rows = nrow(divvy_all) - nrow(divvy_filter_base),
+  removed_outlier_rows = nrow(divvy_filter_base) - nrow(divvy_filter),
+  total_removed_rows = nrow(divvy_all) - nrow(divvy_filter),
+  p99_5_duration_sec = as.numeric(cutoff_995),
+  p99_5_duration_min = round(as.numeric(cutoff_995) / 60, 2)
+)
+
+kable(filter_summary, caption = "Filtering summary")
+```
+
+# Analyze
+
+## Descriptive statistics
+
+This section summarizes basic descriptive statistics for the filtered dataset. The analysis calculates the mean ride length, the maximum ride length, and the most frequent day of the week as a percentage of total filtered rides.
+
+```{r}
+#| label: descriptive-statistics
+
+duration_summary <- divvy_filter %>%
+  summarise(
+    mean_duration_min = round(mean(duration_min, na.rm = TRUE), 2),
+    max_duration_min = round(max(duration_min, na.rm = TRUE), 2)
+  )
+
+weekday_mode <- divvy_filter %>%
+  count(weekday, sort = TRUE) %>%
+  slice(1) %>%
+  mutate(
+    pct_of_total_trips = percent(n / nrow(divvy_filter), accuracy = 0.01)
+  ) %>%
+  rename(
+    mode_weekday = weekday,
+    trips_on_mode_day = n
+  )
+
+kable(duration_summary, caption = "Trip duration summary")
+kable(weekday_mode, caption = "Most frequent day of the week")
+```
+
+## Average ride length by user type
+
+```{r}
+#| label: average-ride-by-user
+
+avg_ride_by_user <- divvy_filter %>%
+  group_by(member_casual) %>%
+  summarise(
+    avg_ride_length_min = round(mean(duration_min, na.rm = TRUE), 2),
+    .groups = "drop"
+  )
+
+kable(avg_ride_by_user, caption = "Average ride length for members and casual riders")
+```
+
+## Average ride length by user type and weekday
+
+```{r}
+#| label: average-ride-by-user-weekday
+
+avg_ride_by_user_weekday <- divvy_filter %>%
+  group_by(member_casual, weekday) %>%
+  summarise(
+    avg_ride_length_min = round(mean(duration_min, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  arrange(member_casual, weekday)
+
+kable(avg_ride_by_user_weekday, caption = "Average ride length by user type and day of week")
+```
+
+## Share of rides by user type and weekday
+
+To make weekday patterns easier to compare, the number of rides is expressed as a percentage **within each user type** rather than as a raw count alone.
+
+```{r}
+#| label: rides-by-user-weekday-pct
+
+rides_by_user_weekday <- divvy_filter %>%
+  group_by(member_casual, weekday) %>%
+  summarise(
+    number_of_rides = n(),
+    .groups = "drop"
+  ) %>%
+  group_by(member_casual) %>%
+  mutate(
+    pct_within_user_type = number_of_rides / sum(number_of_rides)
+  ) %>%
+  ungroup() %>%
+  arrange(member_casual, weekday)
+
+rides_by_user_weekday %>%
+  mutate(pct_within_user_type = percent(pct_within_user_type, accuracy = 0.01)) %>%
+  kable(caption = "Number and percentage of rides by user type and day of week")
+```
+
+## Additional comparison tables
+
+```{r}
+#| label: monthly-rides-summary
+
+rides_by_month <- divvy_filter %>%
+  group_by(member_casual, month_name) %>%
+  summarise(number_of_rides = n(), .groups = "drop")
+
+kable(rides_by_month, caption = "Monthly number of rides by user type")
+```
+
+```{r}
+#| label: hourly-rides-summary
+
+divvy_filter <- divvy_filter %>%
+  mutate(start_hour = hour(started_at))
+
+rides_by_hour <- divvy_filter %>%
+  group_by(member_casual, start_hour) %>%
+  summarise(number_of_rides = n(), .groups = "drop") %>%
+  group_by(member_casual) %>%
+  mutate(pct_within_user_type = number_of_rides / sum(number_of_rides)) %>%
+  ungroup()
+
+kable(head(rides_by_hour, 12), caption = "Sample of hourly ride distribution table")
+```
+
+::: callout-note
+## Descriptive findings so far
+
+-   Casual riders tend to take longer trips than annual members.
+-   Casual usage is more concentrated on weekends.
+-   Member usage is more evenly distributed across weekdays.
+-   These early patterns suggest that casual riders are more leisure-oriented, while members may use the system more for routine mobility.
+:::
+
+# Share
+
+## Supporting visualizations
+
+### Average ride length by user type
+
+This chart compares the average trip duration between annual members and casual riders. It provides an initial view of whether one group tends to take longer rides than the other.
+
+```{r}
+#| label: plot-average-ride-by-user
+#| fig-cap: "Average ride length by user type"
+
+avg_ride_by_user %>%
+  ggplot(aes(x = member_casual, y = avg_ride_length_min, fill = member_casual)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = round(avg_ride_length_min, 2)), vjust = -0.4, size = 4) +
+  scale_fill_manual(values = user_palette) +
+  labs(
+    title = "Average ride length by user type",
+    x = "User type",
+    y = "Average ride length (minutes)"
+  ) +
+  theme(legend.position = "none")
+```
+
+### Average ride length by weekday and user type
+
+This chart shows how average trip duration changes across the week for annual members and casual riders. It helps identify whether riding behavior differs between weekdays and weekends for each group.
+
+```{r}
+#| label: plot-average-ride-by-weekday
+#| fig-cap: "Average ride length by weekday and user type"
+
+avg_ride_by_user_weekday %>%
+  ggplot(aes(x = weekday, y = avg_ride_length_min, group = member_casual, color = member_casual)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = user_palette) +
+  labs(
+    title = "Average ride length by weekday and user type",
+    x = "Day of week",
+    y = "Average ride length (minutes)",
+    color = "User type"
+  )
+```
+
+### Share of rides by weekday within each user type
+
+This chart presents the share of rides by day of the week within each user type. By expressing rides as percentages, it becomes easier to compare weekly usage patterns between annual members and casual riders.
+
+```{r}
+#| label: plot-share-by-weekday
+#| fig-cap: "Share of rides by weekday within each user type"
+
+rides_by_user_weekday %>%
+  ggplot(aes(x = weekday, y = pct_within_user_type, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = user_palette) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    title = "Share of rides by weekday within each user type",
+    x = "Day of week",
+    y = "Percentage of rides",
+    fill = "User type"
+  )
+```
+
+### Monthly number of rides by user type
+
+This chart compares monthly ride volume between annual members and casual riders. It helps identify seasonal patterns and whether one user type is more sensitive to changes over the year.
+
+```{r}
+#| label: plot-rides-by-month
+#| fig-cap: "Monthly number of rides by user type"
+
+rides_by_month %>%
+  ggplot(aes(x = month_name, y = number_of_rides, color = member_casual, group = member_casual)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = user_palette) +
+  labs(
+    title = "Monthly number of rides by user type",
+    x = "Month",
+    y = "Number of rides",
+    color = "User type"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Hourly distribution of rides by user type
+
+This chart shows how ride activity is distributed across the hours of the day for annual members and casual riders. By comparing the percentage of rides by hour within each user type, it becomes possible to identify whether members follow more commute-related patterns and whether casual riders tend to ride at different times of the day.
+
+```{r}
+#| label: plot-rides-by-hour
+#| fig-cap: "Hourly distribution of rides by user type"
+
+rides_by_hour %>%
+  ggplot(aes(x = start_hour, y = pct_within_user_type, color = member_casual)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = user_palette) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Hourly distribution of rides by user type",
+    x = "Hour of day",
+    y = "Percentage of rides",
+    color = "User type"
+  )
+```
+
+### Bike type usage by user type
+
+This chart compares the share of rides by bike type for annual members and casual riders. It helps identify whether the two groups differ in their preference for classic bikes, electric bikes, or other available rideable types.
+
+```{r}
+#| label: plot-bike-type-by-user
+#| fig-cap: "Bike type usage by user type"
+
+bike_type_by_user <- divvy_filter %>%
+  group_by(member_casual, rideable_type) %>%
+  summarise(number_of_rides = n(), .groups = "drop") %>%
+  group_by(member_casual) %>%
+  mutate(pct_within_user_type = number_of_rides / sum(number_of_rides)) %>%
+  ungroup()
+
+bike_type_by_user %>%
+  ggplot(aes(x = rideable_type, y = pct_within_user_type, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = user_palette) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    title = "Bike type usage by user type",
+    x = "Bike type",
+    y = "Percentage of rides",
+    fill = "User type"
+  )
+```
+
+## Key findings
+
+-   Casual riders typically take **longer trips** than annual members.
+-   Casual usage is more concentrated on **Saturday and Sunday**, which suggests more recreational riding behavior.
+-   Member usage is more concentrated on **weekdays**, which is more consistent with commuting or routine transportation.
+-   Seasonal and hourly patterns can help identify the moments when casual riders are most likely to be receptive to membership conversion strategies.
+
+# Act
+
+## Final conclusion
+
+Annual members and casual riders use Cyclistic bikes differently in both **trip duration** and **timing of use**. Casual riders tend to take longer rides and are more active on weekends, while annual members ride more consistently during the workweek and may rely on the system more for practical transportation.
+
+## Top three recommendations
+
+1.  **Target weekend casual riders with conversion offers.** Weekend behavior suggests that casual riders are highly engaged during leisure periods, making post-ride promotions and app-based membership messages especially relevant on Saturdays and Sundays.
+2.  **Promote membership value around frequent-use scenarios.** Since members appear to use the bikes more regularly during weekdays, Cyclistic should highlight cost savings, convenience, and routine usage benefits in campaigns aimed at frequent casual riders.
+3.  **Use digital media around the moments of highest intent.** Hourly and weekday patterns can be used to schedule ads, push notifications, and email campaigns when casual riders are most active and more likely to consider a membership upgrade.
+
+## Additional data that would improve the analysis
+
+-   Rider-level history showing whether casual users repeatedly return to the system.
+-   Pricing response data for single rides, day passes, and membership promotions.
+-   Weather data, holidays, and event calendars to explain seasonal or peak-day effects.
+-   More detailed station-level or route-level behavior if future business questions shift from user type differences to geographic strategy.
