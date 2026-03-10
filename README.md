@@ -30,9 +30,8 @@ This repository includes:
 ```text
 .
 ├─ README.md
-├─ .gitignore
 ├─ cyclistic-presentation.qmd
-├─ `cyclistic-document.qmd`
+├─ cyclistic-document.qmd
 ├─ reveal_refined.css
 ├─ styles.css
 └─ output/
