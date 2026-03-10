@@ -19,9 +19,10 @@ It is a small but practical example of how Quarto can support analytical communi
 
 This repository includes:
 
-- `Cyclistic_presentation_refined_safe.qmd` — Quarto source for the HTML presentation
-- `Capstone_reorganized.qmd` — Quarto source for the HTML document
+- `cyclistic-presentation.qmd` — Quarto source for the HTML presentation
+- `cyclistic-document.qmd` — Quarto source for the HTML document
 - `reveal_refined.css` — Custom CSS file used to style the presentation
+- `styles.css` — Custom CSS file used to style the HTML document
 - Rendered HTML outputs in the `output/` folder
 
 ## Project structure
@@ -30,9 +31,10 @@ This repository includes:
 .
 ├─ README.md
 ├─ .gitignore
-├─ Cyclistic_presentation_refined_safe.qmd
-├─ Capstone_reorganized.qmd
+├─ cyclistic-presentation.qmd
+├─ `cyclistic-document.qmd`
 ├─ reveal_refined.css
+├─ styles.css
 └─ output/
-   ├─ Cyclistic_presentation_refined_safe.html
-   └─ Capstone_reorganized.html
+   ├─ cyclistic-presentation.html
+   └─ cyclistic-document.html
